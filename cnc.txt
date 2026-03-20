@@ -1,0 +1,209 @@
+Here is a complete, lightweight Industry 4.0 stack designed to simulate your dynamic scheduling environment. It includes a FastAPI backend to manage the state, a Python simulator to generate live CNC telemetry, and a React frontend utilizing Material-UI (MUI) to visualize the triad.
+1. The FastAPI Backend (main.py)
+This backend acts as the central API Gateway. It holds the in-memory state for 10 Machines, 10 Materials, and 10 Operators, and provides endpoints to update and retrieve their statuses.
+from fastapi import FastAPI, BackgroundTasks
+from pydantic import BaseModel
+from typing import List
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="DPPS API Gateway")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Models
+class Machine(BaseModel):
+    id: str
+    status: str
+    spindle_speed: int
+    temperature: float
+
+class Man(BaseModel):
+    id: str
+    name: str
+    clearance_level: str
+    status: str
+
+class Material(BaseModel):
+    id: str
+    type: str
+    quantity: int
+    status: str
+
+# In-Memory State
+machines_db = {f"M-{i}": Machine(id=f"M-{i}", status="Idle", spindle_speed=0, temperature=25.0) for i in range(1, 11)}
+
+# Populating operators 
+men_db = [
+    Man(id="O-1", name="Girish", clearance_level="L3 - Secret", status="Active"),
+    Man(id="O-2", name="Priya", clearance_level="L3 - Secret", status="Active"),
+    Man(id="O-3", name="Adithya", clearance_level="L2 - Confidential", status="Idle"),
+    Man(id="O-4", name="Vamshi", clearance_level="L1 - Unclassified", status="Active"),
+    *[Man(id=f"O-{i}", name=f"Tech-{i}", clearance_level="L2", status="Idle") for i in range(5, 11)]
+]
+
+materials_db = [
+    Material(id="MAT-1", type="Titanium Alloy", quantity=50, status="Staged"),
+    Material(id="MAT-2", type="Marine-Grade Steel", quantity=120, status="In Production"),
+    *[Material(id=f"MAT-{i}", type="Aluminum Billet", quantity=200, status="Inventory") for i in range(3, 11)]
+]
+
+@app.get("/api/machines", response_model=List[Machine])
+def get_machines():
+    return list(machines_db.values())
+
+@app.post("/api/machines/{machine_id}/status")
+def update_machine_status(machine_id: str, payload: Machine):
+    if machine_id in machines_db:
+        machines_db[machine_id] = payload
+        return {"message": "Updated"}
+    return {"error": "Machine not found"}
+
+@app.get("/api/men", response_model=List[Man])
+def get_men():
+    return men_db
+
+@app.get("/api/materials", response_model=List[Material])
+def get_materials():
+    return materials_db
+
+2. The Python Simulator (simulator.py)
+This script acts as the IoT layer on the shop floor. It randomly generates telemetry and operational states for the 10 CNC machines and pushes them to the FastAPI backend.
+import time
+import random
+import requests
+
+API_URL = "http://127.0.0.1:8000/api/machines"
+
+def simulate_machines():
+    statuses = ["Active", "Idle", "Maintenance", "Tool Fault"]
+    
+    while True:
+        for i in range(1, 11):
+            machine_id = f"M-{i}"
+            current_status = random.choices(statuses, weights=[70, 15, 10, 5])[0]
+            
+            # Simulate physics based on status
+            if current_status == "Active":
+                speed = random.randint(8000, 12000)
+                temp = round(random.uniform(45.0, 85.0), 1)
+            else:
+                speed = 0
+                temp = round(random.uniform(25.0, 30.0), 1)
+
+            payload = {
+                "id": machine_id,
+                "status": current_status,
+                "spindle_speed": speed,
+                "temperature": temp
+            }
+            
+            try:
+                requests.post(f"{API_URL}/{machine_id}/status", json=payload)
+                print(f"Pushed telemetry for {machine_id}: {current_status}")
+            except requests.exceptions.RequestException:
+                print("Failed to connect to API Gateway.")
+                
+        time.sleep(2) # Update every 2 seconds
+
+if __name__ == "__main__":
+    print("Starting CNC Simulator...")
+    simulate_machines()
+
+3. The React + MUI Frontend (App.jsx)
+This component pulls the data from your API Gateway and renders a clean, grid-based dashboard to track the triad.
+import React, { useState, useEffect } from 'react';
+import { Container, Grid, Card, CardContent, Typography, Chip, Box } from '@mui/material';
+
+export default function DPPSDashboard() {
+  const [machines, setMachines] = useState([]);
+  const [men, setMen] = useState([]);
+  const [materials, setMaterials] = useState([]);
+
+  const fetchData = async () => {
+    const resMachines = await fetch('http://127.0.0.1:8000/api/machines');
+    setMachines(await resMachines.json());
+    
+    const resMen = await fetch('http://127.0.0.1:8000/api/men');
+    setMen(await resMen.json());
+    
+    const resMaterials = await fetch('http://127.0.0.1:8000/api/materials');
+    setMaterials(await resMaterials.json());
+  };
+
+  useEffect(() => {
+    fetchData();
+    const interval = setInterval(fetchData, 2000); // Poll every 2 seconds
+    return () => clearInterval(interval);
+  }, []);
+
+  const getStatusColor = (status) => {
+    if (status === 'Active' || status === 'In Production') return 'success';
+    if (status === 'Maintenance' || status === 'Tool Fault') return 'error';
+    if (status === 'Idle' || status === 'Staged') return 'warning';
+    return 'default';
+  };
+
+  return (
+    <Container maxWidth="xl" sx={{ mt: 4, mb: 4 }}>
+      <Typography variant="h4" gutterBottom fontWeight="bold">
+        Dynamic Planning & Scheduling Dashboard
+      </Typography>
+
+      <Typography variant="h5" sx={{ mt: 3, mb: 2 }}>Machines (Live Telemetry)</Typography>
+      <Grid container spacing={2}>
+        {machines.map((m) => (
+          <Grid item xs={12} sm={6} md={2.4} key={m.id}>
+            <Card variant="outlined">
+              <CardContent>
+                <Typography variant="h6">{m.id}</Typography>
+                <Chip label={m.status} color={getStatusColor(m.status)} size="small" sx={{ mb: 1 }} />
+                <Typography variant="body2">RPM: {m.spindle_speed}</Typography>
+                <Typography variant="body2">Temp: {m.temperature}°C</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
+
+      <Typography variant="h5" sx={{ mt: 4, mb: 2 }}>Man (Operators)</Typography>
+      <Grid container spacing={2}>
+        {men.map((o) => (
+          <Grid item xs={12} sm={6} md={2.4} key={o.id}>
+            <Card variant="outlined" sx={{ bgcolor: '#f8f9fa' }}>
+              <CardContent>
+                <Typography variant="h6">{o.name}</Typography>
+                <Chip label={o.status} color={getStatusColor(o.status)} size="small" sx={{ mb: 1 }} />
+                <Typography variant="body2" color="textSecondary">{o.clearance_level}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
+
+      <Typography variant="h5" sx={{ mt: 4, mb: 2 }}>Material (Inventory & Routing)</Typography>
+      <Grid container spacing={2}>
+        {materials.map((mat) => (
+          <Grid item xs={12} sm={6} md={2.4} key={mat.id}>
+            <Card variant="outlined" sx={{ bgcolor: '#eef2f6' }}>
+              <CardContent>
+                <Typography variant="subtitle1" fontWeight="bold">{mat.id}</Typography>
+                <Typography variant="body2">{mat.type}</Typography>
+                <Box sx={{ mt: 1 }}>
+                  <Chip label={mat.status} color={getStatusColor(mat.status)} size="small" />
+                </Box>
+                <Typography variant="body2" sx={{ mt: 1 }}>Qty: {mat.quantity}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
+    </Container>
+  );
+}
+
